@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Fable Test</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+</head>
+<body>
+    <script src="node_modules/core-js/client/core.min.js"></script>
+    <script src="node_modules/requirejs/require.js"></script>
+    <script>
+        requirejs.config({
+            // Set the baseUrl to the path of the compiled JS code
+            baseUrl: 'out',
+            paths: {
+                // Explicit path to core lib (relative to baseUrl, omit .js)
+                'fable-core': '../node_modules/fable-core/fable-core.min',
+                'PIXI': '../node_modules/pixi.js/bin/pixi.min',
+            }
+        });
+        // Load the entry file of the app (use array, omit .js)
+        requirejs(["index"]);
+    </script>
+</body>
+</html>
