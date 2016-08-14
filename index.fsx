@@ -12,6 +12,14 @@ module GameTypes =
     | Continue
     | RequestState of string
 
+    type Position = { x: float; y: float }
+    type Location = { row: int32; col: int32 }
+    type Rectangle = { position: Position; width: float; height: float }
+    type TextureMap = { texture: PIXI.Texture; rowSize: int32; colSize: int32; tilewidth: float; tileheight: float }
+
+    let positionToPoint position = PIXI.Point(position.x, position.y)
+    let addChildToContainer (container: PIXI.Container) (displayObject: PIXI.DisplayObject) = container.addChild(displayObject) |> ignore
+
     [<AbstractClass>]
     type StateBase() =
         abstract member Update: float -> unit
@@ -33,7 +41,7 @@ module App =
     canvas.style.width <- width.ToString() + "px"
     canvas.style.height <- height.ToString() + "px"
 
-    let renderOptions = 
+    let private renderOptions = 
         createObj [
             "view" ==> canvas
             "transparent" ==> false
@@ -53,14 +61,39 @@ module App =
         renderer.render(stage)
 
 module Map =
-    let baseTexture = PIXI.Texture.fromImage("assets/tileset_1bit.png")
-    let tilesprite = PIXI.extras.TilingSprite(baseTexture, 128., 128.)
-    let tilecount = 64
-    let columns = 8
-    let width = 20
-    let height = 20
-    let tilewidth = 16
-    let tileheight = 16
+    open GameTypes
+
+    let getMapPosition row col textureMap =
+        { x = (float col) * textureMap.tilewidth; y = (float row) * textureMap.tileheight; }
+
+    let getFrame (index, texture) =
+        let srcCol = (if index % texture.colSize = 0 then texture.colSize else index % texture.colSize) - 1
+        let srcRow = int (Math.Floor((float index / float texture.rowSize)))
+        let position = getMapPosition srcCol srcRow texture
+        { position = position; width = float texture.tilewidth; height = float texture.tileheight }
+
+    let getSpriteFromTexture texture index =
+        let frame = getFrame(index, texture)
+        let tile = PIXI.Texture(texture.texture, PIXI.Rectangle(frame.position.x, frame.position.y, frame.width, frame.height))
+        PIXI.Sprite(tile)
+
+    let renderMapLayer textureMap width height (layer: int [][]) =
+            let layerContainer = PIXI.Container()
+            let addToLayer = addChildToContainer layerContainer
+            let sprite = getSpriteFromTexture textureMap
+            let setPos row col (sprite: PIXI.Sprite) =
+                sprite.position <- (getMapPosition row col textureMap) |> positionToPoint
+                sprite
+        
+            for col in 0 .. width - 1  do
+                for row in 0 .. height - 1 do
+                    let index = layer.[row].[col]
+                    if index > 0 then
+                        (sprite index) 
+                        |> setPos row col 
+                        |> addToLayer
+                    else ()
+            layerContainer
 
     let background = 
         [|
@@ -134,27 +167,11 @@ module Map =
             [|0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0|];
         |]
 
-    let createSprite index row col =
-        let srcCol = (if index % 8 = 0 then 8 else index % 8) - 1
-        let srcRow = Math.Floor((float index / 8.))
-        let x = (float srcCol * float tilewidth)
-        let y = (float srcRow * float tileheight)
-        let tile = PIXI.Texture(baseTexture, PIXI.Rectangle(x, y, float tilewidth, float tileheight))
-        let sprt = PIXI.Sprite(tile)
-        sprt.position.x <- col * float tilewidth
-        sprt.position.y <- row * float tileheight
-        sprt
-
-    let createLayer (layer: int [] []) =
-        let layerContainer = PIXI.Container()
-        for col in 0 .. width - 1  do
-            for row in 0 .. height - 1 do
-                let index = layer.[row].[col]
-                if index > 0 then
-                    let sprite = createSprite index (float row) (float col)
-                    layerContainer.addChild(sprite) |> ignore
-                else ()
-        layerContainer
+    let private texture1bit = PIXI.Texture.fromImage("assets/tileset_1bit.png")
+    let tilemap1bit = { texture = texture1bit; rowSize = 8; colSize = 8; tilewidth = 16.; tileheight = 16.; }
+    let mapLayers1bit = 
+        [background; water; obstacles; ]
+        |> List.map (renderMapLayer tilemap1bit 20 20)
 
 module Keyboard =
     let mutable keysPressed = Set.empty
@@ -220,9 +237,6 @@ module GameState =
     type World() =
         inherit GameTypes.StateBase()
         let girl = PIXI.Sprite.fromImage("assets/pink_girl.png")
-        let bg = Map.createLayer Map.background
-        let obs = Map.createLayer Map.obstacles
-        let water = Map.createLayer Map.water
         let worldContainer = PIXI.Container()
 
         override this.Update(dt: float) =
@@ -235,17 +249,13 @@ module GameState =
             girl.anchor.x <- 0.5
             girl.anchor.y <- 0.5
 
-            bg.position.x <- 100.
-            bg.position.y <- 100.
-            obs.position.x <- 100.
-            obs.position.y <- 100.
-            water.position.x <- 100.
-            water.position.y <- 100.
-        
+            Map.mapLayers1bit |> List.iter (fun layer ->
+                layer.position.x <- 100.
+                layer.position.y <- 100.
+                worldContainer.addChild(layer) |> ignore
+                )
+
             worldContainer.addChild(girl) |> ignore
-            worldContainer.addChild(bg) |> ignore
-            worldContainer.addChild(water) |> ignore
-            worldContainer.addChild(obs) |> ignore
             App.stage.addChild(worldContainer) |> ignore
     
         override this.OnExit() =
