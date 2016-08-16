@@ -12,6 +12,7 @@ module GameTypes =
     | Continue
     | RequestState of string
 
+    [<Measure>] type HP // Hit Points
     type Position = { x: float; y: float }
     type Location = { row: int32; col: int32 }
     type Rectangle = { position: Position; width: float; height: float }
@@ -19,6 +20,31 @@ module GameTypes =
 
     let positionToPoint position = PIXI.Point(position.x, position.y)
     let addChildToContainer (container: PIXI.Container) (displayObject: PIXI.DisplayObject) = container.addChild(displayObject) |> ignore
+
+    let getMapPosition location textureMap =
+        { x = (float location.col) * textureMap.tilewidth; y = (float location.row) * textureMap.tileheight; }
+
+    let getFrame index texture =
+        let location = {
+            col = (if index % texture.colSize = 0 then texture.colSize else index % texture.colSize) - 1;
+            row = int (Math.Floor((float index / float texture.rowSize)));
+        }
+        let position = getMapPosition location texture
+        { position = position; width = float texture.tilewidth; height = float texture.tileheight }
+
+    let getSpriteFromTexture texture index =
+        let frame = getFrame index texture
+        let tile = PIXI.Texture(texture.texture, PIXI.Rectangle(frame.position.x, frame.position.y, frame.width, frame.height))
+        PIXI.Sprite(tile)
+
+    let debounce timeout fn =
+        let mutable time = 0.0
+        let doBounce dt =
+            if dt - time > timeout then
+                time <- dt
+                Some fn
+            else None
+        doBounce 
 
     [<AbstractClass>]
     type StateBase() =
@@ -29,9 +55,9 @@ module GameTypes =
 
 module App =
     /// The width of the canvas
-    let width = window.innerWidth
+    let width = window.innerWidth - 100.
     /// The height of the canvas
-    let height = window.innerHeight
+    let height = window.innerHeight - 100.
     /// device pixel ratio
     let dp = window.devicePixelRatio
 
@@ -63,26 +89,13 @@ module App =
 module Map =
     open GameTypes
 
-    let getMapPosition row col textureMap =
-        { x = (float col) * textureMap.tilewidth; y = (float row) * textureMap.tileheight; }
-
-    let getFrame (index, texture) =
-        let srcCol = (if index % texture.colSize = 0 then texture.colSize else index % texture.colSize) - 1
-        let srcRow = int (Math.Floor((float index / float texture.rowSize)))
-        let position = getMapPosition srcCol srcRow texture
-        { position = position; width = float texture.tilewidth; height = float texture.tileheight }
-
-    let getSpriteFromTexture texture index =
-        let frame = getFrame(index, texture)
-        let tile = PIXI.Texture(texture.texture, PIXI.Rectangle(frame.position.x, frame.position.y, frame.width, frame.height))
-        PIXI.Sprite(tile)
-
     let renderMapLayer textureMap width height (layer: int [][]) =
             let layerContainer = PIXI.Container()
             let addToLayer = addChildToContainer layerContainer
             let sprite = getSpriteFromTexture textureMap
-            let setPos row col (sprite: PIXI.Sprite) =
-                sprite.position <- (getMapPosition row col textureMap) |> positionToPoint
+            let setPos location (sprite: PIXI.Sprite) =
+                sprite.position <- (getMapPosition location textureMap) |> positionToPoint
+                sprite.anchor <- {x = 0.5; y = 0.5;} |> positionToPoint
                 sprite
         
             for col in 0 .. width - 1  do
@@ -90,7 +103,7 @@ module Map =
                     let index = layer.[row].[col]
                     if index > 0 then
                         (sprite index) 
-                        |> setPos row col 
+                        |> setPos {row = row; col = col;}
                         |> addToLayer
                     else ()
             layerContainer
@@ -173,6 +186,20 @@ module Map =
         [background; water; obstacles; ]
         |> List.map (renderMapLayer tilemap1bit 20 20)
 
+module Character =
+    open GameTypes
+    type Player(textureMap, textureIndex, location, initialHP) =
+        let sprite = getSpriteFromTexture textureMap textureIndex
+        let mutable hp = initialHP
+        let mutable location = location
+        do
+            sprite.position <- getMapPosition location textureMap |> positionToPoint
+            sprite.anchor <- {x = 0.5; y = 0.5;} |> positionToPoint
+        member this.Sprite = sprite
+        member this.Move(dx, dy) =
+            location <- { location with row = location.row + dy; col = location.col + dx; }
+            sprite.position <- getMapPosition location textureMap |> positionToPoint
+
 module Keyboard =
     let mutable keysPressed = Set.empty
     let reset() = keysPressed <- Set.empty
@@ -185,6 +212,18 @@ module Keyboard =
     let init() =
         window.addEventListener_keydown (fun e -> update(e, true))
         window.addEventListener_keyup (fun e -> update(e, false))
+
+    let right = 39
+    let up = 38
+    let down = 40
+    let left = 37
+    let enter = 13
+    let arrowsPressed() = (
+        (if isPressed up then -1 else 0),
+        (if isPressed down then 1 else 0),
+        (if isPressed right then 1 else 0), 
+        (if isPressed left then -1 else 0)
+        )
 
 module GameState =
     type T =
@@ -200,7 +239,7 @@ module GameState =
             ()
 
         override this.GetEvent() =
-            if Keyboard.isPressed 13 then GameTypes.RequestState "ToWorld" else GameTypes.Continue
+            if Keyboard.isPressed Keyboard.enter then GameTypes.RequestState "ToWorld" else GameTypes.Continue
 
         override this.OnEnter() =
             text.anchor.x <- 0.5
@@ -236,26 +275,29 @@ module GameState =
 
     type World() =
         inherit GameTypes.StateBase()
-        let girl = PIXI.Sprite.fromImage("assets/pink_girl.png")
+
+        let player = new Character.Player(Map.tilemap1bit, 45, { row = 1; col = 3}, 12<GameTypes.HP>)
         let worldContainer = PIXI.Container()
+        let playerMove = GameTypes.debounce 200.0 player.Move
 
         override this.Update(dt: float) =
-            girl.rotation <- girl.rotation + 0.01
+            player.Sprite.rotation <- player.Sprite.rotation + 0.01
+
+            match (Keyboard.arrowsPressed(), playerMove dt) with
+            | ((up, down, right, left), Some move) -> 
+                move((right + left), (down + up))
+            | ((0,0,0,0), _) -> ()
+            | (_, None) -> ()
 
         override this.GetEvent() = GameTypes.Continue
         override this.OnEnter() =
-            girl.position.x <- App.width / 2.0
-            girl.position.y <- App.height / 2.0
-            girl.anchor.x <- 0.5
-            girl.anchor.y <- 0.5
-
             Map.mapLayers1bit |> List.iter (fun layer ->
-                layer.position.x <- 100.
-                layer.position.y <- 100.
+                layer.position.x <- 0.
+                layer.position.y <- 0.
                 worldContainer.addChild(layer) |> ignore
                 )
 
-            worldContainer.addChild(girl) |> ignore
+            worldContainer.addChild(player.Sprite) |> ignore
             App.stage.addChild(worldContainer) |> ignore
     
         override this.OnExit() =
