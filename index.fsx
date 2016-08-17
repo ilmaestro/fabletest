@@ -37,13 +37,20 @@ module GameTypes =
         let tile = PIXI.Texture(texture.texture, PIXI.Rectangle(frame.position.x, frame.position.y, frame.width, frame.height))
         PIXI.Sprite(tile)
 
-    let debounce timeout fn =
+    let canMove location (map: int [][]) =
+        location.row >= 0 &&
+        location.col >= 0 &&
+        location.row < map.Length &&
+        location.col < map.[location.row].Length &&
+        map.[location.row].[location.col] = 0
+
+    let debounce timeout =
         let mutable time = 0.0
         let doBounce dt =
             if dt - time > timeout then
                 time <- dt
-                Some fn
-            else None
+                true
+            else false
         doBounce 
 
     [<AbstractClass>]
@@ -188,7 +195,7 @@ module Map =
 
 module Character =
     open GameTypes
-    type Player(textureMap, textureIndex, location, initialHP) =
+    type Player(textureMap, textureIndex, location, initialHP, obstacles) =
         let sprite = getSpriteFromTexture textureMap textureIndex
         let mutable hp = initialHP
         let mutable location = location
@@ -197,8 +204,10 @@ module Character =
             sprite.anchor <- {x = 0.5; y = 0.5;} |> positionToPoint
         member this.Sprite = sprite
         member this.Move(dx, dy) =
-            location <- { location with row = location.row + dy; col = location.col + dx; }
-            sprite.position <- getMapPosition location textureMap |> positionToPoint
+            let newLocation = { location with row = location.row + dy; col = location.col + dx; }
+            if canMove newLocation obstacles then
+                location <- newLocation
+                sprite.position <- getMapPosition location textureMap |> positionToPoint
 
 module Keyboard =
     let mutable keysPressed = Set.empty
@@ -276,18 +285,18 @@ module GameState =
     type World() =
         inherit GameTypes.StateBase()
 
-        let player = new Character.Player(Map.tilemap1bit, 45, { row = 1; col = 3}, 12<GameTypes.HP>)
+        let player = new Character.Player(Map.tilemap1bit, 45, { row = 1; col = 3}, 12<GameTypes.HP>, Map.obstacles)
         let worldContainer = PIXI.Container()
-        let playerMove = GameTypes.debounce 200.0 player.Move
+        let playerDebounce = GameTypes.debounce 200.0
 
         override this.Update(dt: float) =
             player.Sprite.rotation <- player.Sprite.rotation + 0.01
 
-            match (Keyboard.arrowsPressed(), playerMove dt) with
-            | ((up, down, right, left), Some move) -> 
-                move((right + left), (down + up))
-            | ((0,0,0,0), _) -> ()
-            | (_, None) -> ()
+            if playerDebounce dt then
+                match Keyboard.arrowsPressed() with
+                | (0,0,0,0) -> ()
+                | (up, down, right, left) -> 
+                    player.Move((right + left), (down + up))
 
         override this.GetEvent() = GameTypes.Continue
         override this.OnEnter() =
