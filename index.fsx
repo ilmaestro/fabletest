@@ -37,12 +37,17 @@ module GameTypes =
         let tile = PIXI.Texture(texture.texture, PIXI.Rectangle(frame.position.x, frame.position.y, frame.width, frame.height))
         PIXI.Sprite(tile)
 
-    let canMove location (map: int [][]) =
+    let isLocationOnMap (map: int [][]) location =
         location.row >= 0 &&
         location.col >= 0 &&
         location.row < map.Length &&
-        location.col < map.[location.row].Length &&
-        map.[location.row].[location.col] = 0
+        location.col < map.[location.row].Length
+
+    let getTileIndex (map: int [][]) location =
+        map.[location.row].[location.col]
+
+    let isTileIndex (map: int [][]) location index =
+        (getTileIndex map location) = index
 
     let debounce timeout =
         let mutable time = 0.0
@@ -187,27 +192,38 @@ module Map =
             [|0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0|];
         |]
 
-    let private texture1bit = PIXI.Texture.fromImage("assets/tileset_1bit.png")
-    let tilemap1bit = { texture = texture1bit; rowSize = 8; colSize = 8; tilewidth = 16.; tileheight = 16.; }
+    let tilemap1bit = { texture = PIXI.Texture.fromImage("assets/tileset_1bit.png"); rowSize = 8; colSize = 8; tilewidth = 16.; tileheight = 16.; }
     let mapLayers1bit = 
         [background; water; obstacles; ]
         |> List.map (renderMapLayer tilemap1bit 20 20)
 
 module Character =
     open GameTypes
+    type PlayerMove =
+    | Move of Location
+    | Blocked
+    | ReadSign of Location
+
     type Player(textureMap, textureIndex, location, initialHP, obstacles) =
         let sprite = getSpriteFromTexture textureMap textureIndex
         let mutable hp = initialHP
         let mutable location = location
+        let canMove location =
+            isLocationOnMap obstacles location && isTileIndex obstacles location 0 
+        let isSign location =
+            isLocationOnMap obstacles location && isTileIndex obstacles location 15
         do
             sprite.position <- getMapPosition location textureMap |> positionToPoint
             sprite.anchor <- {x = 0.5; y = 0.5;} |> positionToPoint
         member this.Sprite = sprite
-        member this.Move(dx, dy) =
+        member this.CheckMove(dx, dy) =
             let newLocation = { location with row = location.row + dy; col = location.col + dx; }
-            if canMove newLocation obstacles then
-                location <- newLocation
-                sprite.position <- getMapPosition location textureMap |> positionToPoint
+            if canMove newLocation then Move(newLocation)
+            else if isSign newLocation then ReadSign(newLocation)
+            else Blocked
+        member this.Move(newLocation) =
+            location <- newLocation
+            sprite.position <- getMapPosition location textureMap |> positionToPoint
 
 module Keyboard =
     let mutable keysPressed = Set.empty
@@ -259,6 +275,25 @@ module GameState =
         override this.OnExit() =
             App.stage.removeChild(text) |> ignore
 
+    type ReadSign() =
+        inherit GameTypes.StateBase()
+        let text = PIXI.Text("Sign says: Hello")
+
+        override this.Update(dt: float) =
+            ()
+
+        override this.GetEvent() =
+            if Keyboard.isPressed Keyboard.enter then GameTypes.RequestState "World" else GameTypes.Continue
+
+        override this.OnEnter() =
+            text.anchor.x <- 0.5
+            text.x <- App.width / 2.0
+            text.y <- App.height / 2.0
+            App.stage.addChild(text) |> ignore
+    
+        override this.OnExit() =
+            App.stage.removeChild(text) |> ignore
+
     type Transition(text, timeout, nextState) =
         inherit GameTypes.StateBase()
         let text = PIXI.Text(text)
@@ -274,6 +309,7 @@ module GameState =
             else GameTypes.Continue
 
         override this.OnEnter() =
+            start <- 0.0
             text.anchor.x <- 0.5
             text.x <- App.width / 2.0
             text.y <- App.height / 2.0
@@ -288,6 +324,7 @@ module GameState =
         let player = new Character.Player(Map.tilemap1bit, 45, { row = 1; col = 3}, 12<GameTypes.HP>, Map.obstacles)
         let worldContainer = PIXI.Container()
         let playerDebounce = GameTypes.debounce 200.0
+        let mutable worldState = GameTypes.Continue
 
         override this.Update(dt: float) =
             player.Sprite.rotation <- player.Sprite.rotation + 0.01
@@ -296,17 +333,26 @@ module GameState =
                 match Keyboard.arrowsPressed() with
                 | (0,0,0,0) -> ()
                 | (up, down, right, left) -> 
-                    player.Move((right + left), (down + up))
+                    let dx = right + left
+                    let dy = down + up
+                    match player.CheckMove(dx, dy) with
+                    | Character.Move location -> player.Move(location)
+                    | Character.Blocked -> ()
+                    | Character.ReadSign location ->
+                        worldState <- GameTypes.RequestState "ReadSign" 
+                        ()
 
-        override this.GetEvent() = GameTypes.Continue
+        override this.GetEvent() = worldState
         override this.OnEnter() =
-            Map.mapLayers1bit |> List.iter (fun layer ->
-                layer.position.x <- 0.
-                layer.position.y <- 0.
-                worldContainer.addChild(layer) |> ignore
-                )
+            worldState <- GameTypes.Continue
+            if worldContainer.children.Count = 0 then
+                Map.mapLayers1bit |> List.iter (fun layer ->
+                    layer.position.x <- 0.
+                    layer.position.y <- 0.
+                    worldContainer.addChild(layer) |> ignore
+                    )
 
-            worldContainer.addChild(player.Sprite) |> ignore
+                worldContainer.addChild(player.Sprite) |> ignore
             App.stage.addChild(worldContainer) |> ignore
     
         override this.OnExit() =
@@ -325,6 +371,7 @@ module GameStateManager =
         gameStates.Add("MainMenu", new GameState.MainMenu())
         gameStates.Add("ToWorld", new GameState.Transition("World 1-1", 2000.0, "World"))
         gameStates.Add("World", new GameState.World())
+        gameStates.Add("ReadSign", new GameState.ReadSign())
 
     let requestStateChange fromState toState =
         currentState <- GameState.ChangeState(fromState, toState, gameStates.Item(fromState), gameStates.Item(toState))
