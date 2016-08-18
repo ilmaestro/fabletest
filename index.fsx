@@ -13,10 +13,40 @@ module GameTypes =
     | RequestState of string
 
     [<Measure>] type HP // Hit Points
+
     type Position = { x: float; y: float }
     type Location = { row: int32; col: int32 }
     type Rectangle = { position: Position; width: float; height: float }
     type TextureMap = { texture: PIXI.Texture; rowSize: int32; colSize: int32; tilewidth: float; tileheight: float }
+
+    [<AbstractClass>]
+    type StateBase() =
+        abstract member Update: float -> unit
+        abstract member GetEvent: unit -> GlobalEvent
+        abstract member OnEnter: unit -> unit
+        abstract member OnExit: unit -> unit
+
+module Keyboard =
+    let mutable keysPressed = Set.empty
+    let reset() = keysPressed <- Set.empty
+    let isPressed keyCode = Set.contains keyCode keysPressed
+    let update (e: KeyboardEvent, pressed) =
+        let keyCode = int e.keyCode
+        let op = if pressed then Set.add else Set.remove
+        keysPressed <- op keyCode keysPressed
+        null
+    let init() =
+        window.addEventListener_keydown (fun e -> update(e, true))
+        window.addEventListener_keyup (fun e -> update(e, false))
+
+    let right = 39
+    let up = 38
+    let down = 40
+    let left = 37
+    let enter = 13
+
+module GameHelpers =
+    open GameTypes
 
     let positionToPoint position = PIXI.Point(position.x, position.y)
     let addChildToContainer (container: PIXI.Container) (displayObject: PIXI.DisplayObject) = container.addChild(displayObject) |> ignore
@@ -57,13 +87,13 @@ module GameTypes =
                 true
             else false
         doBounce 
-
-    [<AbstractClass>]
-    type StateBase() =
-        abstract member Update: float -> unit
-        abstract member GetEvent: unit -> GlobalEvent
-        abstract member OnEnter: unit -> unit
-        abstract member OnExit: unit -> unit
+    
+    let getDirection() = (
+        (if Keyboard.isPressed Keyboard.up then -1 else 0),
+        (if Keyboard.isPressed Keyboard.down then 1 else 0),
+        (if Keyboard.isPressed Keyboard.right then 1 else 0), 
+        (if Keyboard.isPressed Keyboard.left then -1 else 0)
+        )
 
 module App =
     /// The width of the canvas
@@ -100,6 +130,7 @@ module App =
 
 module Map =
     open GameTypes
+    open GameHelpers
 
     let renderMapLayer textureMap width height (layer: int [][]) =
             let layerContainer = PIXI.Container()
@@ -199,6 +230,8 @@ module Map =
 
 module Character =
     open GameTypes
+    open GameHelpers
+
     type PlayerMove =
     | Move of Location
     | Blocked
@@ -225,31 +258,6 @@ module Character =
             location <- newLocation
             sprite.position <- getMapPosition location textureMap |> positionToPoint
 
-module Keyboard =
-    let mutable keysPressed = Set.empty
-    let reset() = keysPressed <- Set.empty
-    let isPressed keyCode = Set.contains keyCode keysPressed
-    let update (e: KeyboardEvent, pressed) =
-        let keyCode = int e.keyCode
-        let op = if pressed then Set.add else Set.remove
-        keysPressed <- op keyCode keysPressed
-        null
-    let init() =
-        window.addEventListener_keydown (fun e -> update(e, true))
-        window.addEventListener_keyup (fun e -> update(e, false))
-
-    let right = 39
-    let up = 38
-    let down = 40
-    let left = 37
-    let enter = 13
-    let arrowsPressed() = (
-        (if isPressed up then -1 else 0),
-        (if isPressed down then 1 else 0),
-        (if isPressed right then 1 else 0), 
-        (if isPressed left then -1 else 0)
-        )
-
 module GameState =
     type T =
     | EmptyState
@@ -259,7 +267,10 @@ module GameState =
     type MainMenu() =
         inherit GameTypes.StateBase()
         let text = PIXI.Text("Press Enter to Begin.")
-
+        do
+            text.anchor.x <- 0.5
+            text.x <- App.width / 2.0
+            text.y <- App.height / 2.0
         override this.Update(dt: float) =
             ()
 
@@ -267,9 +278,6 @@ module GameState =
             if Keyboard.isPressed Keyboard.enter then GameTypes.RequestState "ToWorld" else GameTypes.Continue
 
         override this.OnEnter() =
-            text.anchor.x <- 0.5
-            text.x <- App.width / 2.0
-            text.y <- App.height / 2.0
             App.stage.addChild(text) |> ignore
     
         override this.OnExit() =
@@ -278,7 +286,10 @@ module GameState =
     type ReadSign() =
         inherit GameTypes.StateBase()
         let text = PIXI.Text("Sign says: Hello")
-
+        do
+            text.anchor.x <- 0.5
+            text.x <- App.width / 2.0
+            text.y <- App.height / 2.0
         override this.Update(dt: float) =
             ()
 
@@ -286,9 +297,6 @@ module GameState =
             if Keyboard.isPressed Keyboard.enter then GameTypes.RequestState "World" else GameTypes.Continue
 
         override this.OnEnter() =
-            text.anchor.x <- 0.5
-            text.x <- App.width / 2.0
-            text.y <- App.height / 2.0
             App.stage.addChild(text) |> ignore
     
         override this.OnExit() =
@@ -299,6 +307,10 @@ module GameState =
         let text = PIXI.Text(text)
         let mutable start = 0.0
         let mutable elapsed = 0.0
+        do
+            text.anchor.x <- 0.5
+            text.x <- App.width / 2.0
+            text.y <- App.height / 2.0
 
         override this.Update(dt: float) =
             start <- if start = 0.0 then dt else start
@@ -310,9 +322,6 @@ module GameState =
 
         override this.OnEnter() =
             start <- 0.0
-            text.anchor.x <- 0.5
-            text.x <- App.width / 2.0
-            text.y <- App.height / 2.0
             App.stage.addChild(text) |> ignore
     
         override this.OnExit() =
@@ -323,14 +332,22 @@ module GameState =
 
         let player = new Character.Player(Map.tilemap1bit, 45, { row = 1; col = 3}, 12<GameTypes.HP>, Map.obstacles)
         let worldContainer = PIXI.Container()
-        let playerDebounce = GameTypes.debounce 200.0
+        let playerDebounce = GameHelpers.debounce 200.0
         let mutable worldState = GameTypes.Continue
+        do
+            Map.mapLayers1bit |> List.iter (fun layer ->
+                layer.position.x <- 0.
+                layer.position.y <- 0.
+                worldContainer.addChild(layer) |> ignore
+                )
+
+            worldContainer.addChild(player.Sprite) |> ignore
 
         override this.Update(dt: float) =
             player.Sprite.rotation <- player.Sprite.rotation + 0.01
 
             if playerDebounce dt then
-                match Keyboard.arrowsPressed() with
+                match Keyboard.getDirection() with
                 | (0,0,0,0) -> ()
                 | (up, down, right, left) -> 
                     let dx = right + left
@@ -345,14 +362,6 @@ module GameState =
         override this.GetEvent() = worldState
         override this.OnEnter() =
             worldState <- GameTypes.Continue
-            if worldContainer.children.Count = 0 then
-                Map.mapLayers1bit |> List.iter (fun layer ->
-                    layer.position.x <- 0.
-                    layer.position.y <- 0.
-                    worldContainer.addChild(layer) |> ignore
-                    )
-
-                worldContainer.addChild(player.Sprite) |> ignore
             App.stage.addChild(worldContainer) |> ignore
     
         override this.OnExit() =
